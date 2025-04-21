@@ -1,19 +1,20 @@
 import stanza
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 from konlpy.tag import Okt
 
-# 초기화
-stanza.download("ko")  # 최초 1회만 실행
-nlp = stanza.Pipeline("ko", processors="tokenize,pos,lemma,depparse")
+# 형태소 분석기 및 NLP 파이프라인 초기화
+nlp = stanza.Pipeline("ko", processors="tokenize,pos,lemma,depparse", verbose=False)
 okt = Okt()
 
 # 모델 로딩
 ner_pipeline = pipeline("ner", model="klue/bert-base", aggregation_strategy="simple")
 qa_pipeline = pipeline("question-answering", model="deepset/xlm-roberta-base-squad2")
-t2t_pipe = pipeline("text-generation", model="skt/kogpt2-base-v2")
 classifier = pipeline("zero-shot-classification", model="joeddav/xlm-roberta-large-xnli")
 
-# 조사 제거 함수
+tokenizer_kogpt = AutoTokenizer.from_pretrained("skt/kogpt2-base-v2")
+model_kogpt = AutoModelForCausalLM.from_pretrained("skt/kogpt2-base-v2")
+
+
 def clean_josa(word: str) -> str:
     josa_list = ["에서", "에게", "으로", "로", "는", "은", "가", "이", "를", "을", "에", "도", "만"]
     for josa in sorted(josa_list, key=len, reverse=True):
@@ -21,129 +22,107 @@ def clean_josa(word: str) -> str:
             return word[:-len(josa)]
     return word
 
-# 주어 추출 (Stanza)
-def extract_subject_stanza(text: str) -> str:
+
+def extract_subjects(text: str) -> list:
     doc = nlp(text)
-    for sentence in doc.sentences:
-        for word in sentence.words:
-            if word.deprel == "nsubj":
-                return word.text
-    return ""
+    return [w.text for sent in doc.sentences for w in sent.words if w.deprel == "nsubj"]
 
-# 장소 추출 (NER + QA 백업)
+
 def extract_location(text: str) -> str:
-    ner_results = ner_pipeline(text)
-    ner_places = [ent["word"] for ent in ner_results if ent["entity_group"] == "LOC"]
-
+    ner_places = [ent["word"] for ent in ner_pipeline(text) if ent["entity_group"] == "LOC"]
     qa_place = qa_pipeline({
         "question": "이 문장에서 장소는 어디인가요?",
         "context": text
     })["answer"].strip()
-
     print("장소 후보 (NER):", ner_places)
     print("장소 후보 (QA):", qa_place)
+    return clean_josa(ner_places[0]) if ner_places else clean_josa(qa_place)
 
-    return ner_places[0] if ner_places else qa_place
 
-# 형용사 추출 (주어와 가까운 위치 기준)
-def extract_adjectives(text: str, subject: str) -> list:
+def extract_adjectives(text: str, subjects: list) -> dict:
     tokens = okt.pos(text)
-    subject_index = next((i for i, (w, _) in enumerate(tokens) if subject in w), -1)
-    adjectives = [w for i, (w, pos) in enumerate(tokens) if pos == "Adjective" and i < subject_index + 3]
-    return adjectives
+    result = {subj: [] for subj in subjects}
+    for i, (w, pos) in enumerate(tokens):
+        if pos == "Adjective":
+            for subj in subjects:
+                if subj in [t[0] for t in tokens[i+1:i+3]]:
+                    result[subj].append(w)
+    return result
 
-# 동사 추출
-def extract_main_verb(text: str) -> str:
-    verbs = [w for w, pos in okt.pos(text, stem=True) if pos == "Verb"]
-    return verbs[0] if verbs else "하다"
 
-# 동사 프레이즈 생성
-def rewrite_action_phrase(action: str) -> str:
-    prompt = f"""동사를 자연스럽고 다양하게 묘사하는 예시:
-    걷다 → 걷는 장면이 담긴  
-    웃다 → 웃고 있는 모습이 담긴  
-    요리하다 → 요리하는 장면을 담은  
-    연주하다 → 악기를 연주하는 장면을 포착한  
+def extract_verbs(text: str) -> list:
+    return [w for w, pos in okt.pos(text, stem=True) if pos == "Verb"]
+
+
+def rewrite_action_phrase_kogpt2(action: str) -> str:
+    prompt = f"""다음 동작을 자연스럽게 묘사하는 장면 문장을 생성하세요:
+    걷다 → 공원을 걷는 장면이 담긴
+    웃다 → 환하게 웃고 있는 모습이 담긴
+    요리하다 → 음식을 요리하는 장면이 담긴
+    연주하다 → 악기를 연주하는 장면이 담긴
     {action} →"""
-    result = t2t_pipe(prompt, max_new_tokens=30)[0]["generated_text"]
-    lines = result.strip().splitlines()
-    for line in lines:
-        if "→" in line:
-            parts = line.split("→")
-            if len(parts) > 1:
-                candidate = parts[1].strip()
-                if 3 < len(candidate) < 50:
-                    return candidate
-    return f"{action[:-1]}는 장면이 담긴" if action.endswith("다") else f"{action}하는 장면이 담긴"
 
-# 감정 분류 (zero-shot)
-def extract_best_entity(text: str, candidates: list) -> str:
+    inputs = tokenizer_kogpt(prompt, return_tensors="pt")
+    outputs = model_kogpt.generate(**inputs, max_new_tokens=30, pad_token_id=tokenizer_kogpt.eos_token_id)
+    decoded = tokenizer_kogpt.decode(outputs[0], skip_special_tokens=True)
+
+    if f"{action} →" in decoded:
+        generated = decoded.split(f"{action} →", 1)[-1].strip()
+        return generated.split("\n")[0].strip()
+    return f"{action}하는 장면이 담긴"
+
+
+def extract_mood(text: str) -> str:
+    mood_candidates = ["우울한", "슬픈", "어두운", "밝은", "잔잔한", "따뜻한", "몽환적인", "즐거운"]
     result = classifier(
         text,
-        candidate_labels=candidates,
-        hypothesis_template="이 문장은 {} 감정의 영상입니다."
+        candidate_labels=mood_candidates,
+        hypothesis_template="이 문장은 {} 분위기의 영상입니다."
     )
-    return result["labels"][0].split(" ")[0] if result["labels"] else ""
+    return result["labels"][0] if result["labels"] else ""
 
-# 최종 프롬프트 생성
+
 def generate_prompt(user_input: str, style_hint: str = None) -> dict:
-    print("=" * 50)
+    print("=" * 60)
     print("사용자 입력:", user_input)
 
-    subject_raw = extract_subject_stanza(user_input)
-    subject = clean_josa(subject_raw)
-
+    subjects_raw = extract_subjects(user_input)
+    subjects = [clean_josa(s) for s in subjects_raw]
+    adjectives_map = extract_adjectives(user_input, subjects)
+    verbs = extract_verbs(user_input)
     place = extract_location(user_input)
-    place_clean = clean_josa(place)
+    mood = extract_mood(user_input)
 
-    adjectives = extract_adjectives(user_input, subject)
-    action = extract_main_verb(user_input)
-    action_phrase = rewrite_action_phrase(action)
-
-    mood_candidates = [
-        "우울한 (슬픈 분위기)", "슬픈 (감정이 가라앉은)", "어두운 (무거운 느낌)",
-        "밝은 (즐거운 느낌)", "잔잔한 (조용하고 편안한)", "따뜻한 (온화한 감성)",
-        "몽환적인 (꿈같고 흐릿한)", "즐거운 (유쾌하고 활발한)"
-    ]
-    mood = extract_best_entity(user_input, mood_candidates)
-
-    print("주어 (Stanza):", subject_raw)
-    print("형용사 (Okt):", adjectives)
-    print("동사 (Okt):", action)
-    print("동사 프레이즈:", action_phrase)
-    print("최종 선택된 장소:", place_clean)
+    print("주어 (Stanza):", subjects_raw)
+    print("형용사 (Okt):", adjectives_map)
+    print("동사 (Okt):", verbs)
+    print("최종 선택된 장소:", place)
     print("감정 (zero-shot):", mood)
 
-    # 스타일 힌트와 감정 병합 처리
-    mood_clause = f"{mood} 분위기의" if mood else ""
-    style_clause = style_hint.strip() if style_hint else ""
-    if "분위기" in style_clause:
-        mood_clause = ""
+    prompt_lines = []
+    for i, subject in enumerate(subjects):
+        adj = " ".join(adjectives_map.get(subject, []))
+        full_subject = f"{adj} {subject}".strip()
+        verb = verbs[i] if i < len(verbs) else "하다"
+        action_phrase = rewrite_action_phrase_kogpt2(verb)
+        print(f"동사 프레이즈 for {verb}:", action_phrase)
 
-    final_clause = f"{mood_clause} {style_clause} 10초 영상".strip()
+        line = f"{full_subject}가 {place}에서 {action_phrase}"
+        prompt_lines.append(line)
 
-    # 형용사 + 주어 조합
-    subject_phrase = " ".join(adjectives + [subject]) if subject else "무언가"
+    body = " 그리고 ".join(prompt_lines)
+    final_prompt = f"{body} {mood} 분위기의 10초 영상".strip()
+    final_prompt = final_prompt.replace("  ", " ")
 
-    parts = []
-    if subject_phrase:
-        parts.append(f"{subject_phrase}가")
-    if place_clean:
-        parts.append(f"{place_clean}에서")
-    if action_phrase:
-        parts.append(action_phrase)
-    parts.append(final_clause)
-
-    final_prompt = " ".join(parts)
     print("최종 프롬프트:", final_prompt)
-    print("=" * 50)
+    print("=" * 60)
 
     return {
         "auto_prompt": final_prompt,
         "components": {
-            "subject": subject_phrase,
-            "place": place_clean,
-            "action": action,
+            "subjects": subjects,
+            "place": place,
+            "verbs": verbs,
             "mood": mood,
             "style_hint": style_hint or ""
         }
