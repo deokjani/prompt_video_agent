@@ -53,17 +53,24 @@ prompt_video_agent/
 
 ---
 
-## 실행 방법
+## 실행 방법 (PyCharm 기준)
 
-1. 필요한 패키지 설치
-```bash
-pip install -r requirements.txt
-```
+1. **가상환경 생성**
+   PyCharm의 Settings → Project: prompt_video_agent → Python Interpreter → Add Interpreter
+   - `New environment using Conda` 또는 `venv` 선택
+   - 환경 이름: `prompt_video_agent`
 
-2. 앱 실행
-```bash
-streamlit run app.py
-```
+2. **필수 패키지 설치**
+   `requirements.txt`를 PyCharm 내 터미널에서 실행
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **실행**
+   `main.py`를 선택한 후 상단 ▶ 버튼 클릭 또는 터미널에서 실행
+   ```bash
+   streamlit run app.py
+   ```
 
 ---
 
