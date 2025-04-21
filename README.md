@@ -39,16 +39,16 @@ Streamlit 기반의 인터페이스를 통해 입력 → 프롬프트 생성 →
 
 ```
 prompt_video_agent/
-├── app.py                       # Streamlit 기반 실행 파일
-├── base_prompt_engine.py       # 프롬프트 생성 및 구성 요소 추출 핵심 로직
-├── history_manager.py          # 수정 이력 저장/불러오기 기능
-├── main.py                     # 로컬 테스트 실행용 엔트리 파일
-├── prompt_diff.py              # 원본/수정된 프롬프트 비교 시각화
+├── app.py                        # Streamlit 기반 실행 파일
+├── base_prompt_engine.py         # 프롬프트 생성 및 구성 요소 추출 핵심 로직
+├── history_manager.py            # 수정 이력 저장/불러오기 기능
+├── main.py                       # 로컬 테스트 실행용 엔트리 파일
+├── prompt_diff.py                # 원본/수정된 프롬프트 비교 시각화
 ├── prompt_history_recommender.py # 과거 입력과 유사한 문장 추천
-├── prompt_selector.py          # 생성 vs 추천 프롬프트 선택
-├── video_generator.py          # 영상 생성 or mock 영상 출력
-├── requirements.txt            # 의존성 목록
-└── README.md                   # 설명 문서
+├── prompt_selector.py            # 생성 vs 추천 프롬프트 선택
+├── video_generator.py            # 영상 생성 or mock 영상 출력
+├── requirements.txt              # 의존성 목록
+└── README.md                     # 설명 문서
 ```
 
 ---
