@@ -68,9 +68,6 @@ prompt_video_agent/
 
 3. **실행**
    `main.py`를 선택한 후 상단 ▶ 버튼 클릭 또는 터미널에서 실행
-   ```bash
-   streamlit run app.py
-   ```
 
 ---
 
